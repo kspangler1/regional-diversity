@@ -1,0 +1,263 @@
+---
+title: "RF-imputation-COA"
+author: "Britta Schumacher"
+date: "February 1, 2021"
+output: 
+  html_document:
+    theme: flatly
+    toc: yes
+    toc_float: true
+    code_folding: hide
+---
+
+# Box & Whiskers
+
+## Coterminous US
+```{r wanring=F, message=F}
+library(tidyverse)
+coa <- readRDS("./data/data-in/coa_panel.RDS") # full coa panel created 10.1.2019 - BS
+FRR <- readRDS("./data/data-in/FRR.RDS") 
+frr <- as.data.frame(FRR)
+
+coa_clean <- coa %>% 
+  select(GEOID, year, county, age, female, male, full_owner, part_owner, tenant, exp, fert, fert_acres, manure_acres, chem, irrig, labor_n, labor_expense, machinery, perc_cl, perc_pe, acres_per_op, comm_sales, crop_sales, insur_acres)
+
+# Add FRR
+frr <- frr %>% 
+  select(GEOID, FRR, FRR_NAME)
+
+coa_clean <- merge(coa_clean, frr, by = "GEOID")
+
+coa_clean <- coa_clean %>% 
+  select(GEOID, year, county, FRR, FRR_NAME, age, male, part_owner, exp, fert, manure_acres, chem, labor_n, machinery, perc_cl, perc_pe, acres_per_op, comm_sales)
+
+# box and whiskers through time
+boxplot(age~year, data=coa_clean, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_clean, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_clean, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_clean, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_clean, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_clean, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_clean, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_clean, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_clean, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_clean, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_clean, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_clean, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_clean, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 1, The Heartland
+```{r}
+# box and whiskers through time - FRR 1
+coa_frr1 <- coa_clean %>% filter(FRR == 1)
+boxplot(age~year, data=coa_frr1, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr1, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr1, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr1, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr1, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr1, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr1, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr1, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr1, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr1, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr1, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr1, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr1, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 2, Northern Crescent
+```{r}
+# box and whiskers through time - FRR 2
+coa_frr2 <- coa_clean %>% filter(FRR == 2)
+boxplot(age~year, data=coa_frr2, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr2, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr2, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr2, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr2, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr2, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr2, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr2, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr2, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr2, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr2, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr2, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr2, main = "Commodity Sales", outline=FALSE) #
+```
+
+# FRR 3, Northern Great Plains
+```{r}
+# box and whiskers through time - FRR 3
+coa_frr3 <- coa_clean %>% filter(FRR == 3)
+boxplot(age~year, data=coa_frr3, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr3, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr3, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr3, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr3, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr3, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr3, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr3, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr3, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr3, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr3, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr3, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr3, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 4, Prairie Gateway
+```{r}
+# box and whiskers through time - FRR 4
+coa_frr4 <- coa_clean %>% filter(FRR == 4)
+boxplot(age~year, data=coa_frr4, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr4, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr4, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr4, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr4, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr4, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr4, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr4, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr4, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr4, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr4, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr4, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr4, main = "Commodity Sales", outline=FALSE) #
+```
+
+# FRR 5, Eastern Uplands
+```{r}
+# box and whiskers through time - FRR 5
+coa_frr5 <- coa_clean %>% filter(FRR == 5)
+boxplot(age~year, data=coa_frr5, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr5, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr5, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr5, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr5, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr5, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr5, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr5, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr5, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr5, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr5, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr5, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr5, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 6, Southern Seaboard
+```{r}
+# box and whiskers through time - FRR 6
+coa_frr6 <- coa_clean %>% filter(FRR == 6)
+boxplot(age~year, data=coa_frr6, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr6, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr6, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr6, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr6, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr6, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr6, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr6, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr6, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr6, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr6, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr6, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr6, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 7, Fruitful Rim
+```{r}
+# box and whiskers through time - FRR 7
+coa_frr7 <- coa_clean %>% filter(FRR == 7)
+boxplot(age~year, data=coa_frr7, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr7, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr7, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr7, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr7, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr7, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr7, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr7, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr7, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr7, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr7, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr7, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr7, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 8, Basin & Range
+```{r}
+# box and whiskers through time - FRR 8
+coa_frr8 <- coa_clean %>% filter(FRR == 8)
+boxplot(age~year, data=coa_frr8, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr8, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr8, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr8, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr8, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr8, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr8, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr8, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr8, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr8, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr8, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr8, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr8, main = "Commodity Sales", outline=FALSE) #
+```
+
+## FRR 9, Mississippi Portal
+```{r}
+# box and whiskers through time - FRR 9
+coa_frr9 <- coa_clean %>% filter(FRR == 9)
+boxplot(age~year, data=coa_frr9, main = "Age", outline=FALSE)
+boxplot(male ~ year, data=coa_frr9, main = "Male", outline=FALSE)
+boxplot(part_owner ~ year, data=coa_frr9, main = "Part Owner", outline=FALSE)
+boxplot(exp ~ year, data=coa_frr9, main = "Experience", outline=FALSE)
+boxplot(fert ~ year, data=coa_frr9, main = "Fertilizer", outline=FALSE) #
+boxplot(manure_acres ~ year, data=coa_frr9, main = "Manure", outline=FALSE)
+boxplot(chem ~ year, data=coa_frr9, main = "Chemicals", outline=FALSE) #
+boxplot(labor_n ~ year, data=coa_frr9, main = "Labor", outline=FALSE) #
+boxplot(machinery ~ year, data=coa_frr9, main = "Machinery", outline=FALSE) #
+boxplot(perc_cl ~ year, data=coa_frr9, main = "Cropland", outline=FALSE)
+boxplot(perc_pe ~ year, data=coa_frr9, main = "Pastureland", outline=FALSE)
+boxplot(acres_per_op ~ year, data=coa_frr9, main = "Acres per Operation", outline=FALSE) #
+boxplot(comm_sales ~ year, data=coa_frr9, main = "Commodity Sales", outline=FALSE) #
+```
+
+# Imputation
+```{r}
+div <- readRDS("./data/data-out/divers_classif_data.RDS")
+
+# Impute
+test <- div %>% 
+  group_by(GEOID) %>% 
+  fill(age, male, part_owner, exp, fert, manure_acres, chem, labor_n, machinery, perc_cl, perc_pe, acres_per_op, comm_sales, .direction = "downup")
+
+# How many counties have no data at all? Places like St. Louis, DC, etc.? n = 40)
+test2 <- test %>% filter_at(vars(age, male, part_owner, exp, fert, manure_acres, chem, labor_n, machinery, perc_cl, perc_pe, acres_per_op, comm_sales), any_vars(complete.cases(.)))
+
+test2 <- test2 %>% select(GEOID, YEAR, county, RICH_CDL_AG, SDI_CDL_AG, SIDI_CDL_AG, age, male, part_owner, exp, fert, manure_acres, chem, labor_n, machinery, perc_cl, perc_pe, acres_per_op, FRR, FRR_NAME, comm_sales, T_GRAVEL, T_SAND, T_SILT, T_REF_BULK_DENSITY, T_OC, S_PH_H2O, T_CEC_CLAY, T_CEC_SOIL, T_CACO3, T_CASO4, T_ESP, T_ECE, BV1, BV2, BV4, BV8, BV9, BV10, BV12, BV15, BV18)
+
+# Add interpolated irrigation data
+irr <- readRDS("./data/data-in/clean_merged_irrigation.RDS")
+
+test3 <- merge(test2, irr, by = c("GEOID", "YEAR"))
+```
+
+# How much data is still missing after 2012 - 2017 imputation? 
+
+Much better, but still missing quite a bit of data. These counts are the same for 2012 and 2017.
+```{r}
+n12 <- test3 %>% filter(YEAR == 2012) 
+na_count12 <-sapply(n12, function(y) sum(length(which(is.na(y)))))
+na_count12 <- data.frame(na_count12)
+na_count12
+```
+
+# How many county-years do we lose if we row-wise delete after imputation? 
+
+We'll lose 134 counties in each year AFTER imputing using 2012 - 2017 data. Again, these are the same for 2012 and 2017 after imputation.
+```{r}
+n12_cc <- n12[complete.cases(n12),]
+length(n12_cc$GEOID)
+```
+
+# save .RDS
+```{r}
+saveRDS(test3, "./data/data-out/div-imputed.RDS")
+```
+

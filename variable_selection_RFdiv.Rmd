@@ -1,0 +1,349 @@
+---
+title: "Variable Selection: Regional Diversity RF Models"
+author: "Britta Schumacher"
+date: "Last updated: `r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    theme: yeti
+    toc: yes
+    toc_float: true
+    code_folding: hide
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+## Load data
+
+```{r, message=F, warning=F}
+library(dplyr)
+library(tidyverse)
+library(ggcorrplot)
+library(ranger)
+library(gbm)
+library(verification)
+library(caret)
+library(e1071)
+library(EZtune)
+library(spdplyr)
+library(sp)
+```
+
+
+```{r, message=F, warning=F }
+div <- readRDS("./data/divers_classif_data.RDS")
+div_reclass <- readRDS("./data/diversity_calcs_010921.RDS") %>% filter(YEAR %in% c(2012, 2017))
+
+# Recompute the GEOID with leading zeros to facilitate join.
+div_new <- div_reclass %>%
+  dplyr::mutate(GEOID = dplyr::if_else(nchar(GEOID) < 5,
+                                       paste0("0", GEOID), as.character(GEOID)))
+
+# Reclassify updated FIPS ID due to county name change. This eliminates a current
+# missing value in the dataset.
+# - https://www.ddorn.net/data/FIPS_County_Code_Changes.pdf
+div_new$GEOID[div_new$GEOID == "46113"] <- "46102"
+
+div_new$GEOID <- as.factor(div_new$GEOID)
+div_new2 <- dplyr::left_join(div, div_new, by = c("GEOID", "YEAR"))
+
+cty <- readRDS("./data/county.RDS")
+state <- readRDS("./data/states.RDS")
+s.layer <- list("sp.polygons", state, col = "gray") 
+div_12 <- div_new2 %>% filter(YEAR == 2012)
+div_17 <- div_new2 %>% filter(YEAR == 2017)
+```
+
+# Overall SDI/SIDI/RICH variance 
+```{r}
+div_new_sub <- subset(div_reclass, select=c(GEOID, YEAR, shannon_new, simpson_new, richness_new))
+#div_2 <- div_2 %>% filter(YEAR %in% c(2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017))
+div_sum <- div_new_sub %>% group_by(YEAR) %>% mutate(sdi_avg = mean(shannon_new)) %>% mutate(sidi_avg = mean(simpson_new)) %>% mutate(rich_avg = mean(richness_new))
+
+sdi_overall <- ggplot(div_sum, aes(x=YEAR, y = sdi_avg))+
+  geom_line() +
+  #geom_smooth(method=lm,color="red", fill="#69b3a2",se=TRUE)+
+  scale_y_log10() + 
+  #xlim("2008","2017")+
+  theme_minimal()
+
+sidi_overall <- ggplot(div_sum, aes(x=YEAR, y = sidi_avg))+
+  geom_line() +
+  #geom_smooth(method=lm,color="blue", fill="#69b3a2",se=TRUE)+
+  scale_y_log10() + 
+  #xlim("2008","2017")+
+  theme_minimal()
+
+rich_overall <- ggplot(div_sum, aes(x=YEAR, y = rich_avg))+
+  geom_line() +
+  #geom_smooth(method=lm,color="darkgreen", fill="#69b3a2",se=TRUE)+
+  scale_y_log10() + 
+  #xlim("2008","2017")+
+  theme_minimal()
+
+par(mfrow=c(3,1))
+sdi_overall
+sidi_overall
+rich_overall
+```
+
+## Data Availability
+
+```{r, message=F, warning=F}
+#find % available
+data_avail <- div_12 %>%
+  summarize_all(funs(sum(is.na(.)) / length(.)))
+#if you want to transpose, use the code below
+t_d <- t(data_avail)
+
+#find % available
+data_avail2 <- div_17 %>%
+  summarize_all(funs(sum(is.na(.)) / length(.)))
+#if you want to transpose, use the code below
+t_d2 <- t(data_avail2)
+
+t_d
+t_d2
+```
+
+OK, based on data availability, we will remove the following variables because they are over 8% missing for both 2012 and 2017:
+
+* irrig (2012: 10.1% missing, 2017: 9.8%)
+* tenant (2012: 8.3% missing, 2017: 7.4%)
+* PHASE1 (2012: 83.8% missing, 2017: 83.8%)
+* insur_acres (2012: 10.9%, 2017: 10.0%)
+
+## Pair-wise correlations 
+
+### Pair-Wise Correlation Matrix ~ Soil
+
+```{r, warning=F, message=F}
+# visualize by "natural" groupings of variables
+# first, soil -- removing qualitative/coded variables T_TEXTURE, REF_DEPTH, DRAINAGE, AWC_CLASS, ADD_PROP, T_USDA_TEX_CLASS
+soil <- div_12[c(31:53)]
+soil <- soil[complete.cases(soil), ]
+corr_soil <- round(cor(soil[c(1:23)]), 2)
+p.mat_soil <- cor_pmat(soil[c(1:23)])
+corrplot_soil <- ggcorrplot(corr_soil, hc.order = FALSE, p.mat = p.mat_soil, outline.col = "white", type = "lower", insig = "blank",lab = F, ggtheme = ggplot2::theme_minimal, colors = c("#6D9EC1", "white", "#E46726"))
+corrplot_soil
+
+#output corrplot to jpg
+ggsave(filename = "./for_manuscript/SI_figs/corrplot_soil.jpg", plot = corrplot_soil, dpi = 300, width = 8, height = 5)
+
+
+# see initial correlations
+red_soil <- as.data.frame(as.table(cor(soil[c(1:23)]), 1))
+red_soil <- red_soil %>%  filter(Freq != 1) %>% mutate(aFreq = abs(Freq)) %>% arrange(desc(aFreq)) %>% filter(aFreq > 0.80) %>% dplyr::select(c(Var1, Var2, Freq))
+
+knitr::kable(red_soil, caption = "Soil variable pairs with high correlation")
+
+```
+
+First, we'll get rid of topsoil pH because this can be pretty variable over time in some places. Farmers actively manage for this in the midwest--but pretty time invariable in other places, like the intermountain west. Anyway, let's toss it and see where that takes us. Also , let's get rid of T_GRAVEL v. T_SAND. Let's also get rid of T_TEB--J. Cowan prioritized this as a 2 (medium priority) v. T_CEC_SOIL (high priority) and S_PH_H2O (high priority); T_BS--J. Cowan prioritized this as a 2 (medium priority) v. S_PH_H20 (high priority). Let's keep T_REF_BULK_DENSITY because it is an indication of how restricted root growth will be in a soil and changes as the percentage clay-silt-sand changes; so we'll get rid of T_CLAY. 
+
+Drop: 
+
+- T_PH_H2O 
+- T_TEB 
+- T_BS 
+- T_CLAY 
+- REF_DEPTH
+- T_TEXTURE
+- DRAINAGE
+- AWC_CLASS
+- ADD_PROP
+- T_USDA_TEX_CLASS
+
+### Pair-Wise Correlation Matrix ~ Climate
+
+```{r, echo=FALSE, warning=F, message=F}
+library(ggcorrplot)
+# visualize by "natural" groupings of variables
+# second, climate -- 
+climate <- div_12[c(54:72)]
+climate <- climate[complete.cases(climate), ]
+corr_clim <- round(cor(climate[c(1:19)]), 2)
+p.mat_clim <- cor_pmat(climate[c(1:19)])
+corrplot_clim <- ggcorrplot(corr_clim, hc.order = FALSE, p.mat = p.mat_clim, outline.col = "white", type = "lower", insig = "blank",lab = F, ggtheme = ggplot2::theme_minimal, colors = c("#6D9EC1", "white", "#E46726"))
+corrplot_clim
+
+ggsave(filename = "./for_manuscript/SI_figs/corrplot_clim.jpg", plot = corrplot_clim, dpi = 300, width = 8, height = 5)
+
+# see initial correlations
+red_clim <- as.data.frame(as.table(cor(climate[c(1:19)]), 1))
+red_clim <- red_clim %>%  filter(Freq != 1) %>% mutate(aFreq = abs(Freq)) %>% arrange(desc(aFreq)) %>% filter(aFreq > 0.80) %>% dplyr::select(c(Var1, Var2, Freq))
+
+
+knitr::kable(red_clim, caption = "Climate variable pairs with high correlation")
+```
+
+- Whenever there was a choice between quarter and month, I chose quarter
+- If it was a choice between total precip or mean temp. and a quarterly metric, I chose the total annual value as it would be less sensitive
+- There were some choices between two quarter values (mean temp of wettest vs. coldest quarter), so I chose the one that was correlated with other variables as well (although this got a little messy)
+
+Drop: 
+
+BV14
+BV13
+BV6 
+BV17
+BV19
+BV16
+BV5
+BV11
+
+### Pair-Wise Correlation Matrix ~ COA
+```{r, echo=FALSE, warning=F, message=F}
+library(ggcorrplot)
+# visualize by "natural" groupings of variables
+# third, COA -- 
+COA <- div_12[c(7:25,28:30)]
+COA <- COA[complete.cases(COA), ]
+corr_coa <- round(cor(COA[c(1:19)]), 2)
+p.mat_coa <- cor_pmat(COA[c(1:19)])
+corrplot_coa <- ggcorrplot(corr_coa, hc.order = FALSE, p.mat = p.mat_coa, outline.col = "white", type = "lower", insig = "blank",lab = F, ggtheme = ggplot2::theme_minimal, colors = c("#6D9EC1", "white", "#E46726"))
+corrplot_coa
+
+ggsave(filename = "./for_manuscript/SI_figs/corrplot_COA.jpg", plot = corrplot_coa, dpi = 300, width = 8, height = 5)
+
+# see initial correlations
+red_coa <- as.data.frame(as.table(cor(COA[c(1:19)]), 1))
+red_coa <- red_coa %>%  filter(Freq != 1) %>% mutate(aFreq = abs(Freq)) %>% arrange(desc(aFreq)) %>% filter(aFreq > 0.80) %>% dplyr::select(c(Var1, Var2, Freq))
+
+knitr::kable(red_coa, caption = "COA variable pairs with high correlation")
+```
+
+
+Drop:
+
+- female (male has greater availability across the two years)
+- full_owner (part_owner has greater availability across the two years)
+- labor_expense (labor_n has greater availability across the two years)
+- fert_acres (perc_cl has greater availability than fert_acres and fert_acres/fert are VERY close)
+- crop_sales (chem has greater availability than crop_sales)
+
+## Variable selection 
+
+### Rules of elimination: 
+
+- Drop any climate variable that measure a range, retain the min and max values 
+
+- Drop any climate variable that is a monthly measurement and retain quarterly measurement
+
+- Drop any climate variable that is an annual summary
+
+- Drop any soil variables that were ranked less important by J. Cowan
+
+- Choose the variable with the higher availability for other variable pairs 
+
+### Remove missing variables
+
+```{r }
+#Row-wise delete missing data 
+
+#2012
+drops <- c("PHASE1", "irrig", "tenant", "insur_acres")
+div_12 <- div_12[ , !(names(div_12) %in% drops)]
+
+#2017
+div_17 <- div_17[ , !(names(div_17) %in% drops)]
+```
+
+### Remove variables that are linear products of other variables 
+```{r }
+#BV3 is a direct product of BV2 and BV7
+#BV7 is a direct product of BV5 and BV6
+div_12 <- div_12 %>% dplyr::select(-c("BV3", "BV7"))
+
+div_17 <- div_17 %>% dplyr::select(-c("BV3", "BV7"))
+```
+
+### Remove correlated soil variables
+
+```{r}
+div_12 <- div_12 %>% dplyr::select(-c("T_PH_H2O", "T_TEB", "T_BS", "T_CLAY"))
+
+div_17 <- div_17 %>% dplyr::select(-c("T_PH_H2O", "T_TEB", "T_BS", "T_CLAY"))
+```
+
+These are also more difficult to interpret/qualitative soil variables that are a bit redundant and ranked by J. Cowan as 2-3 (medium to low priority)
+
+```{r }
+div_12 <- div_12 %>% dplyr::select(-c("DRAINAGE", "T_USDA_TEX_CLASS", "T_TEXTURE", "REF_DEPTH", "AWC_CLASS", "ADD_PROP"))
+
+div_17 <- div_17 %>% dplyr::select(-c("DRAINAGE", "T_USDA_TEX_CLASS", "T_TEXTURE", "REF_DEPTH", "AWC_CLASS", "ADD_PROP"))
+```
+
+#### Remove correlated climate variables 
+
+```{r}
+div_12 <- div_12 %>% dplyr::select(-c("BV14", "BV13", "BV6","BV17", "BV19", "BV16", "BV5", "BV11"))
+
+div_17 <- div_17 %>% dplyr::select(-c("BV14", "BV13", "BV6","BV17", "BV19", "BV16", "BV5", "BV11"))
+```
+
+#### Remove correlated COA variables 
+```{r}
+div_12 <- div_12 %>% dplyr::select(-c("female", "full_owner","labor_expense","fert_acres", "crop_sales"))
+
+div_17 <- div_17 %>% dplyr::select(-c("female", "full_owner","labor_expense","fert_acres", "crop_sales"))
+```
+
+### Read in imputed dataset 
+```{r}
+div_impute <- readRDS("./data/div-imputed.RDS")
+div_impute_all <- readRDS("./data/div-imputed_all.RDS")
+div_impute <- dplyr::left_join(div_new, div_impute, by = c("GEOID", "YEAR"))
+div_impute_all <- dplyr::left_join(div_new, div_impute_all, by = c("GEOID", "YEAR"))
+div_12 <- div_impute_all %>% filter(YEAR == 2012)
+div_17 <- div_impute_all %>% filter(YEAR == 2017)
+```
+
+#### Select complete cases 
+```{r}
+div_12 <- div_12[complete.cases(div_12), ]
+
+div_17 <- div_17[complete.cases(div_17), ]
+```
+
+We've removed 196 counties for both 2012 and 2017.
+
+### Remove pixel count < 250 
+This is based on the sensitivity analysis by BB. Results from this analysis that justify the 250 pixel count cutoff can be found in "soil_combine.011121.R"
+```{r}
+div_12 <- div_12 %>% dplyr::filter(count > 250)
+#deleted 2913 - 2874 = 39 counties 
+
+div_17 <- div_17 %>% dplyr::filter(count > 250)
+#deleted 3108 - 2903 = 10 counties 
+```
+
+In total: we've removed 235 counties for 2012 and 206 for 2017
+
+### Check data avail. 
+```{r}
+colSums(is.na(div_12))
+colSums(is.na(div_17))               
+```
+
+Should be no missing data. 
+
+### Pair-wise correlations after selection
+
+```{r}
+red <- as.data.frame(as.table(cor(div_12[17:28,31:54]), 1)) 
+red <- red %>% filter(Freq != 1) %>% mutate(aFreq = abs(Freq)) %>% arrange(desc(aFreq)) %>% filter(aFreq > 0.80) %>% dplyr::select(c(Var1, Var2, Freq))
+red
+# show correlations
+corr_div <- round(cor(div_12[c(17:28,31:54)]), 2) 
+p.mat_div <- cor_pmat(div_12[c(17:28,31:54)])
+corrplot_div <- ggcorrplot(corr_div, hc.order = FALSE, p.mat = p.mat_div, outline.col = "white", type = "lower", insig = "blank",lab = F, ggtheme = ggplot2::theme_minimal, colors = c("#6D9EC1", "white", "#E46726"))
+corrplot_div
+```
+We still see highly correlated variable pairs, but since our objective was not to remove collinearity altogether but rather to increase tree diversity in RF models, this is OK.
+
+#Output to R data file
+```{r}
+save(div_12, div_17, file = "./data/div_response.RData")
+```
