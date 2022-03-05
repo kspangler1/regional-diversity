@@ -1,0 +1,1338 @@
+---
+title: "Regional Diversity RF Regression"
+author: "Kaitlyn Spangler"
+date: "Last updated: `r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  html_document:
+    theme: yeti
+    toc: yes
+    toc_float: true
+    code_folding: hide
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(error = TRUE)
+```
+
+# Data prep
+
+```{r, message=F, warning=F}
+library(dplyr)
+library(tidyverse)
+library(ggcorrplot)
+library(ranger)
+library(gbm)
+library(verification)
+library(caret)
+library(e1071)
+library(EZtune)
+library(spdplyr)
+library(sp)
+library(randomForest)
+```
+
+## Load variable-selected data
+
+```{r, message=F, warning=F }
+load("./data/div_response.RData") 
+cty <- readRDS("./data/county.RDS")
+state <- readRDS("./data/states.RDS")
+s.layer <- list("sp.polygons", state, col = "gray") 
+
+#drop FRR name, county name, and other response variable columns up front
+div_12 <- div_12 %>% dplyr::select(-c(FRR_NAME, county, SDI_CDL_AG, SIDI_CDL_AG, RICH_CDL_AG, shannon, simpson, richness, shannon_double, simpson_double, richness_double, count))
+div_17 <- div_17 %>% dplyr::select(-c(FRR_NAME, county, SDI_CDL_AG, SIDI_CDL_AG, RICH_CDL_AG, shannon, simpson, richness, shannon_double, simpson_double, richness_double, count))
+
+div_12_sdi <- div_12 %>% dplyr::select(-c("GEOID", "YEAR", "simpson_new", "richness_new"))
+div_17_sdi <- div_17 %>% dplyr::select(-c("GEOID", "YEAR", "simpson_new", "richness_new"))
+
+div_12_sidi <- div_12 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "richness_new"))
+div_17_sidi <- div_17 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "richness_new"))
+
+div_12_rich <- div_12 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "simpson_new"))
+div_17_rich <- div_17 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "simpson_new"))
+```
+
+# Produce summary statistics table 
+```{r}
+sdi_table1 <- div_12_sdi %>%
+  group_by(FRR) %>%
+  summarise(n = n(), mean=mean(shannon_new), sd=sd(shannon_new)) 
+
+sdi_table2 <- div_17_sdi %>%
+  group_by(FRR) %>%
+  summarise(n = n(), mean=mean(shannon_new), sd=sd(shannon_new)) 
+```
+
+
+# Distribution of response variables 
+
+Want to check if they are normally distributed based on recommendation by De'ath & Fabricius (2000). 
+
+```{r}
+#2012
+hist(div_12$shannon_new)
+hist(div_12$simpson_new)
+hist(div_12$richness_new)
+
+boxplot(div_12$shannon_new)
+boxplot(div_12$simpson_new)
+boxplot(div_12$richness_new)
+
+#2017
+hist(div_17$shannon_new)
+hist(div_17$simpson_new)
+hist(div_17$richness_new)
+
+boxplot(div_17$shannon_new)
+boxplot(div_17$simpson_new)
+boxplot(div_17$richness_new)
+
+#SIDI skewness
+library(moments)
+skewness(div_12$simpson_new, na.rm = TRUE) #prior to transformation
+skewness(div_17$simpson_new, na.rm = TRUE) #prior to transformation
+
+## Transformation 
+div_12$simpson_new_transf <- (div_12$simpson_new)^2
+div_17$simpson_new_transf <- (div_17$simpson_new)^2
+
+skewness(div_12$simpson_new_transf, na.rm = TRUE) #after to transformation
+skewness(div_17$simpson_new_transf, na.rm = TRUE) #after to transformation
+
+hist(div_12$simpson_new_transf)
+hist(div_17$simpson_new_transf)
+
+div_12_sidi_transf <- div_12 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "richness_new", "simpson_new"))
+div_17_sidi_transf <- div_17 %>% dplyr::select(-c("GEOID", "YEAR", "shannon_new", "richness_new", "simpson_new"))
+```
+
+shannon_new is normally distributed and does not need to be transformed.  
+simpson_new is skewed to the left.
+richness_new is normally distributed and does not need to be transformed.
+We transformed simpson_new by the square transformation to simpson_new_transf
+
+# Analysis 
+
+# Overall RF 
+## SDI 2012
+
+```{r}
+set.seed(1234) 
+
+rf12_sdi <- randomForest(shannon_new ~ ., data = div_12_sdi, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf12_sdi
+
+```
+
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf12_sdi))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF12_SDIimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF12_SDIimpplot_nation.png'))
+```
+
+### Partial dependence plots
+```{r}
+#relationship between standardized variables and diversity holding all others constant and plot them all on the same plot 
+
+#find mean and SD of each variable and create a dataframe from the partial plot in RF function 
+# chem
+chems <- div_12_sdi %>% summarise(mean = mean(chem), sd = sd(chem))
+chemp <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"chem")) #call RF model, call dataset, call variable of interest 
+chemp$VAR = "Chemical input"  
+chemps <- chemp %>% mutate(xs = (x - chems$mean) / chems$sd)
+
+# fert
+ferts <- div_12_sdi %>% summarise(mean = mean(fert), sd = sd(fert))
+fertp <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"fert")) #call RF model, call dataset, call variable of interest 
+fertp$VAR = "Fertilizer input"  
+fertps <- fertp %>% mutate(xs = (x - ferts$mean) / ferts$sd)
+
+# perc_cl
+perc_cls <- div_12_sdi %>% summarise(mean = mean(perc_cl), sd = sd(perc_cl))
+perc_clp <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"perc_cl")) #call RF model, call dataset, call variable of interest 
+perc_clp$VAR = "Percent cropland"  
+perc_clps <- perc_clp %>% mutate(xs = (x - perc_cls$mean) / perc_cls$sd)
+
+# BV15
+BV15s <- div_12_sdi %>% summarise(mean = mean(BV15), sd = sd(BV15))
+BV15p <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"BV15"))
+BV15p$VAR <- "Precipitation seasonality"
+BV15ps <- BV15p %>% mutate(xs = (x - BV15s$mean) / BV15s$sd)
+
+# BV18
+BV18s <- div_12_sdi %>% summarise(mean = mean(BV18), sd = sd(BV18))
+BV18p <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"BV18"))
+BV18p$VAR <- "Precipitation of warmest quarter"
+BV18ps <- BV18p %>% mutate(xs = (x - BV18s$mean) / BV18s$sd)
+
+#gvt_prog
+gvt_progs <- div_12_sdi %>% summarise(mean = mean(gvt_prog), sd = sd(gvt_prog))
+gvt_progp <- as.data.frame(partialPlot(rf12_sdi,div_12_sdi,"gvt_prog"))
+gvt_progp$VAR <- "Government programs"
+gvt_progps <- gvt_progp %>% mutate(xs = (x - gvt_progs$mean) / gvt_progs$sd)
+
+# merge into one dataframe
+pdp <- rbind(chemps,fertps,BV15ps,perc_clps,BV18ps,gvt_progps)
+
+input_pp <- ggplot(pdp) +   
+  geom_line(aes(x = xs, y = y, color = VAR), size = 1.2) + 
+  theme_classic() +
+  theme(legend.title = element_blank(), legend.position = "bottom" ) + 
+  scale_colour_manual(values=c("#336633", "#99CC99", "#CC6633", "#4A7DA5", "#99CCFF", "#CCCC99", "FCAE1E")) +
+  labs(x = "Standardized values",        
+       y = "Shannon's Diversity Index") +   
+  theme(text = element_text(size=8)) 
+
+input_pp
+
+ggsave(input_pp, file = './figs/RFpdp_overallSDI2012.png')
+```
+
+## SDI 2017
+### Default tuning parameters 
+```{r}
+set.seed(1234) 
+
+rf17_sdi <- randomForest(shannon_new ~ ., data = div_17_sdi, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf17_sdi
+```
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf17_sdi))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF17_SDIimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF17_SDIimpplot_nation.png'))
+```
+
+### Tuning 
+```{r}
+set.seed(1234) 
+
+rf17_sdi_tune1 <- randomForest(shannon_new ~ ., data = div_17_sdi, ntree = 1000) #default mtry = p/3
+rf17_sdi_tune1
+
+set.seed(1234)
+rf17_sdi_tune2 <- randomForest(shannon_new ~ ., data = div_17_sdi, ntree = 1000, mtry = 24) #mtry = (p/3)*2
+rf17_sdi_tune2
+
+set.seed(1234)
+rf17_sdi_tune3 <- randomForest(shannon_new ~ ., data = div_17_sdi, ntree = 2000) #default mtry = p/3
+rf17_sdi_tune3
+
+set.seed(1234)
+rf17_sdi_tune4 <- randomForest(shannon_new ~ ., data = div_17_sdi, ntree = 2000, mtry = 24) #mtry = (p/3)*2
+rf17_sdi_tune4
+
+```
+
+#### Variable importance 
+```{r}
+imp1 <- as.data.frame(varImpPlot(rf17_sdi_tune1))
+imp2 <- as.data.frame(varImpPlot(rf17_sdi_tune2))
+imp3 <- as.data.frame(varImpPlot(rf17_sdi_tune3))
+imp4 <- as.data.frame(varImpPlot(rf17_sdi_tune4))
+```
+
+##### Nicer visualization 
+```{r}
+imp1$varnames <- rownames(imp1) # row names to column
+imp1
+
+imp1_plot <- ggplot(imp1, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp1_plot, file = paste0('./figs/RF17_SDIimpplot_tune1.png'))
+
+imp2$varnames <- rownames(imp2) # row names to column
+imp2
+
+imp2_plot <- ggplot(imp2, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp2_plot, file = paste0('./figs/RF17_SDIimpplot_tune2.png'))
+
+imp3$varnames <- rownames(imp3) # row names to column
+imp3
+
+imp3_plot <- ggplot(imp3, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp3_plot, file = paste0('./figs/RF17_SDIimpplot_tune3.png'))
+
+imp4$varnames <- rownames(imp4) # row names to column
+imp4
+
+imp4_plot <- ggplot(imp4, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp4_plot, file = paste0('./figs/RF17_SDIimpplot_tune4.png'))
+```
+
+## SIDI 2012
+
+```{r}
+set.seed(1234) 
+
+rf12_sidi <- randomForest(simpson_new ~ ., data = div_12_sidi, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf12_sidi
+```
+
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf12_sidi))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF12_SIDIimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF12_SIDIimpplot_nation.png'))
+```
+
+## SIDI 2017 
+### Default tuning
+```{r}
+set.seed(1234) 
+
+rf17_sidi <- randomForest(simpson_new ~ ., data = div_17_sidi, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf17_sidi
+```
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf17_sidi))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF17_SIDIimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF17_SIDIimpplot_nation.png'))
+```
+
+### Tuning 
+```{r}
+set.seed(1234) 
+
+rf17_sidi_tune1 <- randomForest(simpson_new ~ ., data = div_17_sidi, ntree = 1000) #default mtry = p/3
+rf17_sidi_tune1
+
+set.seed(1234)
+rf17_sidi_tune2 <- randomForest(simpson_new ~ ., data = div_17_sidi, ntree = 1000, mtry = 24) #mtry = (p/3)*2
+rf17_sidi_tune2
+
+set.seed(1234)
+rf17_sidi_tune3 <- randomForest(simpson_new ~ ., data = div_17_sidi, ntree = 2000) #default mtry = p/3
+rf17_sidi_tune3
+
+set.seed(1234)
+rf17_sidi_tune4 <- randomForest(simpson_new ~ ., data = div_17_sidi, ntree = 2000, mtry = 24) #mtry = (p/3)*2
+rf17_sidi_tune4
+
+```
+
+#### Variable importance 
+```{r}
+imp1 <- as.data.frame(varImpPlot(rf17_sidi_tune1))
+imp2 <- as.data.frame(varImpPlot(rf17_sidi_tune2))
+imp3 <- as.data.frame(varImpPlot(rf17_sidi_tune3))
+imp4 <- as.data.frame(varImpPlot(rf17_sidi_tune4))
+```
+
+##### Nicer visualization 
+```{r}
+imp1$varnames <- rownames(imp1) # row names to column
+imp1
+
+imp1_plot <- ggplot(imp1, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp1_plot, file = paste0('./figs/RF17_SIDIimpplot_tune1.png'))
+
+imp2$varnames <- rownames(imp2) # row names to column
+imp2
+
+imp2_plot <- ggplot(imp2, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp2_plot, file = paste0('./figs/RF17_SIDIimpplot_tune2.png'))
+
+imp3$varnames <- rownames(imp3) # row names to column
+imp3
+
+imp3_plot <- ggplot(imp3, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp3_plot, file = paste0('./figs/RF17_SIDIimpplot_tune3.png'))
+
+imp4$varnames <- rownames(imp4) # row names to column
+imp4
+
+imp4_plot <- ggplot(imp4, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp4_plot, file = paste0('./figs/RF17_SIDIimpplot_tune4.png'))
+```
+
+## SIDI TRANSF 2012
+
+```{r}
+set.seed(1234) 
+
+rf12_sidi_transf <- randomForest(simpson_new_transf ~ ., data = div_12_sidi_transf, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf12_sidi_transf
+```
+
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf12_sidi_transf))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF12_SIDITRANSFimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF12_SIDITRANSFimpplot_nation.png'))
+```
+
+## SIDI TRANSF 2017 
+### Default tuning
+```{r}
+set.seed(1234) 
+
+rf17_sidi_transf <- randomForest(simpson_new_transf ~ ., data = div_17_sidi_transf, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf17_sidi_transf
+```
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf17_sidi_transf))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF17_SIDITRANSFimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_nation.png'))
+```
+
+### Tuning 
+```{r}
+set.seed(1234) 
+
+rf17_siditransf_tune1 <- randomForest(simpson_new_transf ~ ., data = div_17_sidi_transf, ntree = 1000) #default mtry = p/3
+rf17_siditransf_tune1
+
+set.seed(1234)
+rf17_siditransf_tune2 <- randomForest(simpson_new_transf ~ ., data = div_17_sidi_transf, ntree = 1000, mtry = 24) #mtry = (p/3)*2
+rf17_siditransf_tune2
+
+set.seed(1234)
+rf17_siditransf_tune3 <- randomForest(simpson_new_transf ~ ., data = div_17_sidi_transf, ntree = 2000) #default mtry = p/3
+rf17_siditransf_tune3
+
+set.seed(1234)
+rf17_siditransf_tune4 <- randomForest(simpson_new_transf ~ ., data = div_17_sidi_transf, ntree = 2000, mtry = 24) #mtry = (p/3)*2
+rf17_siditransf_tune4
+
+```
+
+#### Variable importance 
+```{r}
+imp1 <- as.data.frame(varImpPlot(rf17_siditransf_tune1))
+imp2 <- as.data.frame(varImpPlot(rf17_siditransf_tune2))
+imp3 <- as.data.frame(varImpPlot(rf17_siditransf_tune3))
+imp4 <- as.data.frame(varImpPlot(rf17_siditransf_tune4))
+```
+
+##### Nicer visualization 
+```{r}
+imp1$varnames <- rownames(imp1) # row names to column
+imp1
+
+imp1_plot <- ggplot(imp1, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp1_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_tune1.png'))
+
+imp2$varnames <- rownames(imp2) # row names to column
+imp2
+
+imp2_plot <- ggplot(imp2, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp2_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_tune2.png'))
+
+imp3$varnames <- rownames(imp3) # row names to column
+imp3
+
+imp3_plot <- ggplot(imp3, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp3_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_tune3.png'))
+
+imp4$varnames <- rownames(imp4) # row names to column
+imp4
+
+imp4_plot <- ggplot(imp4, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp4_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_tune4.png'))
+```
+
+## RICH 2012 
+
+```{r}
+set.seed(1234) 
+rf12_rich <- randomForest(richness_new ~ ., data = div_12_rich, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf12_rich
+```
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf12_rich))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF12_RICHimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF12_RICHimpplot_nation.png'))
+```
+
+## RICH 2017
+### Default tuning
+```{r}
+set.seed(1234) 
+rf17_rich <- randomForest(richness_new ~ ., data = div_17_rich, ntree = 400, mtry = 13) #specify # of variables and trees for splitting here
+rf17_rich
+```
+
+### What are the most important variables?
+```{r}
+imp <- as.data.frame(varImpPlot(rf17_rich))
+```
+
+#### Nicer visualization
+```{r}
+imp$varnames <- rownames(imp) # row names to column
+imp
+
+imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+
+saveRDS(imp, file = paste0('./results/RF12_RICHimp_nation.RDS'))
+ggsave(imp_plot, file = paste0('./figs/RF12_RICHimpplot_nation.png'))
+```
+
+### Tuning 
+```{r}
+set.seed(1234) 
+
+rf17_rich_tune1 <- randomForest(richness_new ~ ., data = div_17_rich, ntree = 1000) #default mtry = p/3
+rf17_rich_tune1
+
+set.seed(1234)
+rf17_rich_tune2 <- randomForest(richness_new ~ ., data = div_17_rich, ntree = 1000, mtry = 24) #mtry = (p/3)*2
+rf17_rich_tune2
+
+set.seed(1234)
+rf17_rich_tune3 <- randomForest(richness_new ~ ., data = div_17_rich, ntree = 2000) #default mtry = p/3
+rf17_rich_tune3
+
+set.seed(1234)
+rf17_rich_tune4 <- randomForest(richness_new ~ ., data = div_17_rich, ntree = 2000, mtry = 24) #mtry = (p/3)*2
+rf17_rich_tune4
+
+```
+
+#### Variable importance 
+```{r}
+imp1 <- as.data.frame(varImpPlot(rf17_rich_tune1))
+imp2 <- as.data.frame(varImpPlot(rf17_rich_tune2))
+imp3 <- as.data.frame(varImpPlot(rf17_rich_tune3))
+imp4 <- as.data.frame(varImpPlot(rf17_rich_tune4))
+```
+
+##### Nicer visualization 
+```{r}
+imp1$varnames <- rownames(imp1) # row names to column
+imp1
+
+imp1_plot <- ggplot(imp1, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp1_plot, file = paste0('./figs/RF17_RICHimpplot_tune1.png'))
+
+imp2$varnames <- rownames(imp2) # row names to column
+imp2
+
+imp2_plot <- ggplot(imp2, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 1000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp2_plot, file = paste0('./figs/RF17_RICHimpplot_tune2.png'))
+
+imp3$varnames <- rownames(imp3) # row names to column
+imp3
+
+imp3_plot <- ggplot(imp3, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default")+
+  theme_minimal()
+
+ggsave(imp3_plot, file = paste0('./figs/RF17_RICHimpplot_tune3.png'))
+
+imp4$varnames <- rownames(imp4) # row names to column
+imp4
+
+imp4_plot <- ggplot(imp4, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  ggtitle("ntree = 2000, mtry = default*2")+
+  theme_minimal()
+
+ggsave(imp4_plot, file = paste0('./figs/RF17_RICHimpplot_tune4.png'))
+```
+
+# Subset RFs by FRR
+
+# SDI   
+##  2012 
+
+```{r}
+# remove variables that contributed least to the full model
+rf12_sdi_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_12_sdirf <- div_12_sdi %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build training and test sets
+  set.seed(1234) 
+  
+  # build RF on training data
+  frr_sdi_12 <- randomForest(shannon_new ~ ., data = div_12_sdirf, ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_sdi_12
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_sdi_12))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  #pdp 
+  chem_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"chem"))
+  fert_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"fert"))
+  cl_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"perc_cl"))
+  ps_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"BV15"))
+  ts_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"BV4"))
+  gp_sdi12_frr <- as.data.frame(partialPlot(frr_sdi_12,div_12_sdirf,"gvt_prog"))
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_sdi_12)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF12_SDIimp_',index,'.RDS'))
+  saveRDS(chem_sdi12_frr, file = paste0('./results/chem_sdi12_',index,'.RDS'))
+  saveRDS(fert_sdi12_frr, file = paste0('./results/fert_sdi12_',index,'.RDS'))
+  saveRDS(cl_sdi12_frr, file = paste0('./results/cl_sdi12_',index,'.RDS'))
+  saveRDS(ps_sdi12_frr, file = paste0('./results/ps_sdi12_',index,'.RDS'))
+  saveRDS(ts_sdi12_frr, file = paste0('./results/ts_sdi12_',index,'.RDS'))
+  saveRDS(gp_sdi12_frr, file = paste0('./results/gp_sdi12_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF12_SDIimpplot_',index,'.png'))# importance plots individually
+  #build pdp & output here
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf12_sdi_1 <- rf12_sdi_frr(1) 
+rf12_sdi_2 <- rf12_sdi_frr(2)
+rf12_sdi_3 <- rf12_sdi_frr(3)
+rf12_sdi_4 <- rf12_sdi_frr(4)
+rf12_sdi_5 <- rf12_sdi_frr(5)
+rf12_sdi_6 <- rf12_sdi_frr(6)
+rf12_sdi_7 <- rf12_sdi_frr(7)
+rf12_sdi_8 <- rf12_sdi_frr(8)
+rf12_sdi_9 <- rf12_sdi_frr(9)
+
+rf12_sdi_1
+rf12_sdi_2
+rf12_sdi_3
+rf12_sdi_4
+rf12_sdi_5
+rf12_sdi_6
+rf12_sdi_7
+rf12_sdi_8
+rf12_sdi_9
+```
+
+## 2017 
+
+```{r}
+# remove variables that contributed least to the full model
+rf17_sdi_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_17_sdirf <- div_17_sdi %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on full data
+  set.seed(1234) 
+  frr_sdi_17 <- randomForest(shannon_new ~ ., data = div_17_sdirf, ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_sdi_17
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_sdi_17))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+    #pdp 
+  chem_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"chem"))
+  fert_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"fert"))
+  cl_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"perc_cl"))
+  ps_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"BV15"))
+  ts_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"BV4"))
+  gp_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"gvt_prog"))
+  fs_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"acres_per_op"))
+  toc_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"T_OC"))
+  pe_sdi17_frr <- as.data.frame(partialPlot(frr_sdi_17,div_17_sdirf,"perc_pe"))
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_sdi_17)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF17_SDIimp_',index,'.RDS'))
+  saveRDS(chem_sdi17_frr, file = paste0('./results/chem_sdi17_',index,'.RDS'))
+  saveRDS(fert_sdi17_frr, file = paste0('./results/fert_sdi17_',index,'.RDS'))
+  saveRDS(cl_sdi17_frr, file = paste0('./results/cl_sdi17_',index,'.RDS'))
+  saveRDS(ps_sdi17_frr, file = paste0('./results/ps_sdi17_',index,'.RDS'))
+  saveRDS(ts_sdi17_frr, file = paste0('./results/ts_sdi17_',index,'.RDS'))
+  saveRDS(gp_sdi17_frr, file = paste0('./results/gp_sdi17_',index,'.RDS'))
+  saveRDS(fs_sdi17_frr, file = paste0('./results/fs_sdi17_',index,'.RDS'))
+  saveRDS(toc_sdi17_frr, file = paste0('./results/toc_sdi17_',index,'.RDS'))
+  saveRDS(pe_sdi17_frr, file = paste0('./results/pe_sdi17_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF17_SDIimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf17_sdi_1 <- rf17_sdi_frr(1) 
+rf17_sdi_2 <- rf17_sdi_frr(2)
+rf17_sdi_3 <- rf17_sdi_frr(3)
+rf17_sdi_4 <- rf17_sdi_frr(4)
+rf17_sdi_5 <- rf17_sdi_frr(5)
+rf17_sdi_6 <- rf17_sdi_frr(6)
+rf17_sdi_7 <- rf17_sdi_frr(7)
+rf17_sdi_8 <- rf17_sdi_frr(8)
+rf17_sdi_9 <- rf17_sdi_frr(9)
+
+rf17_sdi_1
+rf17_sdi_2
+rf17_sdi_3
+rf17_sdi_4
+rf17_sdi_5
+rf17_sdi_6
+rf17_sdi_7
+rf17_sdi_8
+rf17_sdi_9
+```
+
+# SIDI 
+
+## 2012 
+
+```{r}
+# remove variables that contributed least to the full model
+rf12_sidi_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_12_sidirf <- div_12_sidi %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on training data
+  set.seed(1234) 
+  frr_sidi_12 <- randomForest(simpson_new ~ ., data = div_12_sidirf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_sidi_12
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_sidi_12))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_sidi_12)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF12_SIDIimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF12_SIDIimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf12_sidi_1 <- rf12_sidi_frr(1) 
+rf12_sidi_2 <- rf12_sidi_frr(2)
+rf12_sidi_3 <- rf12_sidi_frr(3)
+rf12_sidi_4 <- rf12_sidi_frr(4)
+rf12_sidi_5 <- rf12_sidi_frr(5)
+rf12_sidi_6 <- rf12_sidi_frr(6)
+rf12_sidi_7 <- rf12_sidi_frr(7)
+rf12_sidi_8 <- rf12_sidi_frr(8)
+rf12_sidi_9 <- rf12_sidi_frr(9)
+
+rf12_sidi_1
+rf12_sidi_2
+rf12_sidi_3
+rf12_sidi_4
+rf12_sidi_5
+rf12_sidi_6
+rf12_sidi_7
+rf12_sidi_8
+rf12_sidi_9
+```
+
+## 2017 
+
+```{r}
+# remove variables that contributed least to the full model
+rf17_sidi_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_17_sidirf <- div_17_sidi %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on full data
+  set.seed(1234) 
+  frr_sidi_17 <- randomForest(simpson_new ~ ., data = div_17_sidirf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_sidi_17
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_sidi_17))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_sidi_17)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF17_SIDIimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF17_SIDIimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf17_sidi_1 <- rf17_sidi_frr(1) 
+rf17_sidi_2 <- rf17_sidi_frr(2)
+rf17_sidi_3 <- rf17_sidi_frr(3)
+rf17_sidi_4 <- rf17_sidi_frr(4)
+rf17_sidi_5 <- rf17_sidi_frr(5)
+rf17_sidi_6 <- rf17_sidi_frr(6)
+rf17_sidi_7 <- rf17_sidi_frr(7)
+rf17_sidi_8 <- rf17_sidi_frr(8)
+rf17_sidi_9 <- rf17_sidi_frr(9)
+
+rf17_sidi_1
+rf17_sidi_2
+rf17_sidi_3
+rf17_sidi_4
+rf17_sidi_5
+rf17_sidi_6
+rf17_sidi_7
+rf17_sidi_8
+rf17_sidi_9
+```
+
+
+# SIDI TRANSF
+
+## 2012 TRANSF 
+
+```{r}
+# remove variables that contributed least to the full model
+rf12_siditransf_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_12_siditransfrf <- div_12_sidi_transf %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on training data
+  set.seed(1234) 
+  frr_siditransf_12 <- randomForest(simpson_new_transf ~ ., data = div_12_siditransfrf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_siditransf_12
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_siditransf_12))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_siditransf_12)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF12_SIDITRANSFimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF12_SIDITRANSFimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf12_siditransf_1 <- rf12_siditransf_frr(1) 
+rf12_siditransf_2 <- rf12_siditransf_frr(2)
+rf12_siditransf_3 <- rf12_siditransf_frr(3)
+rf12_siditransf_4 <- rf12_siditransf_frr(4)
+rf12_siditransf_5 <- rf12_siditransf_frr(5)
+rf12_siditransf_6 <- rf12_siditransf_frr(6)
+rf12_siditransf_7 <- rf12_siditransf_frr(7)
+rf12_siditransf_8 <- rf12_siditransf_frr(8)
+rf12_siditransf_9 <- rf12_siditransf_frr(9)
+
+rf12_siditransf_1
+rf12_siditransf_2
+rf12_siditransf_3
+rf12_siditransf_4
+rf12_siditransf_5
+rf12_siditransf_6
+rf12_siditransf_7
+rf12_siditransf_8
+rf12_siditransf_9
+```
+
+## 2017 
+
+```{r}
+# remove variables that contributed least to the full model
+rf17_siditransf_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_17_siditransfrf <- div_17_sidi_transf %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on full data
+  set.seed(1234) 
+  frr_siditransf_17 <- randomForest(simpson_new_transf ~ ., data = div_17_siditransfrf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_siditransf_17
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_siditransf_17))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_siditransf_17)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF17_SIDITRANSFimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF17_SIDITRANSFimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce variance explained and metrics of resubstitution 
+
+}
+
+rf17_siditransf_1 <- rf17_siditransf_frr(1) 
+rf17_siditransf_2 <- rf17_siditransf_frr(2)
+rf17_siditransf_3 <- rf17_siditransf_frr(3)
+rf17_siditransf_4 <- rf17_siditransf_frr(4)
+rf17_siditransf_5 <- rf17_siditransf_frr(5)
+rf17_siditransf_6 <- rf17_siditransf_frr(6)
+rf17_siditransf_7 <- rf17_siditransf_frr(7)
+rf17_siditransf_8 <- rf17_siditransf_frr(8)
+rf17_siditransf_9 <- rf17_siditransf_frr(9)
+
+rf17_siditransf_1
+rf17_siditransf_2
+rf17_siditransf_3
+rf17_siditransf_4
+rf17_siditransf_5
+rf17_siditransf_6
+rf17_siditransf_7
+rf17_siditransf_8
+rf17_siditransf_9
+```
+
+# RICH 
+
+## 2012 
+
+```{r}
+# remove variables that contributed least to the full model
+rf12_rich_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_12_richrf <- div_12_rich %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on full data 
+  set.seed(1234) 
+  frr_rich_12 <- randomForest(richness_new ~ ., data = div_12_richrf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_rich_12
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_rich_12))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_rich_12)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF12_RICHimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF12_RICHimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce MSE, RMSE, R2, pR2, and variance explained and metrics of resubstitution 
+
+}
+
+rf12_rich_1 <- rf12_rich_frr(1) 
+rf12_rich_2 <- rf12_rich_frr(2)
+rf12_rich_3 <- rf12_rich_frr(3)
+rf12_rich_4 <- rf12_rich_frr(4)
+rf12_rich_5 <- rf12_rich_frr(5)
+rf12_rich_6 <- rf12_rich_frr(6)
+rf12_rich_7 <- rf12_rich_frr(7)
+rf12_rich_8 <- rf12_rich_frr(8)
+rf12_rich_9 <- rf12_rich_frr(9)
+
+rf12_rich_1
+rf12_rich_2
+rf12_rich_3
+rf12_rich_4
+rf12_rich_5
+rf12_rich_6
+rf12_rich_7
+rf12_rich_8
+rf12_rich_9
+```
+
+## 2017 
+
+```{r}
+# remove variables that contributed least to the full model
+rf17_rich_frr <- function(frr) {
+  
+  #index
+  index <- frr #name data frames produced 
+  
+  # build data
+  div_17_richrf <- div_17_rich %>% 
+  filter(FRR == frr) %>% #specify FRR
+  dplyr::select(-c(FRR)) #get rid of FRR column
+  
+  # build RF on full data 
+  set.seed(1234) 
+  frr_rich_17 <- randomForest(richness_new ~ ., data = div_17_richrf,ntree = 2000, importance = TRUE) #specify trees and # of variables 
+  frr_rich_17
+  
+  # importance plots
+  imp <- as.data.frame(varImpPlot(frr_rich_17))
+  imp$varnames <- rownames(imp) # row names to column
+  
+  imp_plot <- ggplot(imp, aes(x=reorder(varnames, IncNodePurity), y=IncNodePurity)) + 
+  geom_point() +
+  geom_segment(aes(x=varnames,xend=varnames,y=0,yend=IncNodePurity)) +
+  ylab("Increase in node purity") +
+  xlab("") +
+  coord_flip() +
+  theme_minimal()
+    
+  colnames(imp)[1] <- paste0('IncPurity_',index) #create imp dataframe and name IncPurity in that FRR
+  
+  # build argument to feed save, below
+  list <- list("var_exp" = frr_rich_17)
+  
+  # return
+  saveRDS(imp, file = paste0('./results/RF17_RICHimp_',index,'.RDS'))
+  ggsave(imp_plot, file = paste0('./figs/RF17_RICHimpplot_',index,'.png')) # importance plots individually
+  return(list) # will produce MSE, RMSE, R2, pR2, and variance explained and metrics of resubstitution 
+
+}
+
+rf17_rich_1 <- rf17_rich_frr(1) 
+rf17_rich_2 <- rf17_rich_frr(2)
+rf17_rich_3 <- rf17_rich_frr(3)
+rf17_rich_4 <- rf17_rich_frr(4)
+rf17_rich_5 <- rf17_rich_frr(5)
+rf17_rich_6 <- rf17_rich_frr(6)
+rf17_rich_7 <- rf17_rich_frr(7)
+rf17_rich_8 <- rf17_rich_frr(8)
+rf17_rich_9 <- rf17_rich_frr(9)
+
+rf17_rich_1
+rf17_rich_2
+rf17_rich_3
+rf17_rich_4
+rf17_rich_5
+rf17_rich_6
+rf17_rich_7
+rf17_rich_8
+rf17_rich_9
+```
+
+
+

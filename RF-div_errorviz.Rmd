@@ -1,0 +1,110 @@
+---
+title: "error plots"
+author: "Britta Schumacher"
+date: "2/3/2022"
+output: html_document
+---
+
+# Bring in the resubstitution data
+```{r}
+library(tidyverse)
+library(tmap)
+# build full list of files and bring them into the R environment
+preds <- function(pattern){
+  
+  list.files(path = "./results/preds/",
+                    pattern = pattern, full.names = T, all.files = T) %>% 
+  map_dfr(readRDS)
+  
+}
+ 
+sdi12 <- preds("preds12SDI")
+sdi17 <- preds("preds17SDI")
+sidi12 <- preds("preds12SIDI")
+sidi17 <- preds("preds17SIDI")
+rich12 <- preds("preds12RICH")
+rich17 <- preds("preds17RICH")
+```
+
+# Build resubstitition error
+```{r}
+error <- function(df, divvar, year){
+  
+  df %>% 
+    dplyr::select(c(GEOID, divvar, preds)) %>% 
+    mutate(error = .[[2]] - .[[3]]) %>% 
+    mutate(div_var = divvar,
+           year = year) %>% 
+    dplyr::select(c(1,4,5,6))
+  
+}
+
+sdi12_er <- error(df = sdi12, divvar = "shannon_new", year = 2012) 
+sdi17_er <- error(df = sdi17, divvar = "shannon_new", year = 2017)
+sidi12_er <- error(df = sidi12, divvar = "simpson_new", year = 2012)
+sidi17_er <- error(df = sidi17, divvar = "simpson_new", year = 2017)
+rich12_er <- error(df = rich12, divvar = "richness_new", year = 2012)
+rich17_er <- error(df = rich17, divvar = "richness_new", year = 2017)
+```
+
+# Pull all error data into one dataframe to visualize
+```{r}
+error_data <- rbind(sdi12_er, sdi17_er, sidi12_er, sidi17_er, rich12_er, rich17_er)
+#error_data <- merge(error_data, frr)
+saveRDS(error_data, "./data/error-data.RDS")
+```
+
+# Make spatial
+```{r}
+cty <- readRDS("./data/county.RDS")
+
+# build frr spatial
+frr <- read.csv("./data/FRR_data.csv") 
+frr <- frr[,1:2]
+colnames(frr)<- c("GEOID", "FRR")
+frr$GEOID <- str_pad(frr$GEOID, width = 5, side = "left", pad= "0") 
+
+#Make spatial:
+frr_shp <- merge(cty, frr, by = "GEOID")
+
+getmode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#Aggregate counties to the regional boundaries:
+library(maptools)
+frr_agg <- unionSpatialPolygons(SpP = frr_shp, IDs = frr_shp$FRR)
+frr_final <- aggregate(frr_shp["FRR"], frr_agg, FUN = getmode)
+```
+
+# Build maps
+```{r}
+error_maps <- function(metric, time, breaks) {
+  
+  test <- error_data %>% 
+    filter(div_var == metric,
+           year == time)
+  
+  er_sp <- merge(cty, test, by = "GEOID", duplicateGeoms = TRUE)
+  
+  map <- tm_shape(er_sp) +
+  tm_polygons(col = "error", breaks = breaks, palette = c("#67001F","#B2182B", "#D6604D", "#F4A582", "#FDDBC7", "#D1E5F0" ,"#92C5DE","#4393C3", "#2166AC", "#053061"), border.col = "transparent", title = "Average Error", legend.hist = TRUE) +
+  tm_legend(outside = TRUE, hist.width = 1.5) +
+  tm_layout(frame = FALSE,
+            legend.hist.size = 0.5) +
+      tm_shape(frr_final) +
+  tm_borders(col = "black")
+
+tmap_save(tm = map, file = paste0("./viz/", metric, time, ".png"), dpi = 400)
+  
+}
+
+error_maps(metric = "shannon_new", time = 2012, breaks = c(-1.5,-0.4,-0.3,-0.2,-0.1,0,0.1,0.2,0.3,0.4,0.9))
+error_maps(metric = "simpson_new", time = 2012, breaks = c(-0.7,-0.5,-0.3,-0.2,-0.1,0,0.1,0.2,0.3,0.4, 0.5))
+error_maps(metric = "richness_new", time = 2012, breaks = c(-6.5,-5,-3.5,-2,-1,0,1,2,3,4,5))
+error_maps(metric = "shannon_new", time = 2017, breaks = c(-1.5,-0.4,-0.3,-0.2,-0.1,0,0.1,0.2,0.3,0.4,1.0))
+error_maps(metric = "simpson_new", time = 2017, breaks = c(-0.7,-0.5,-0.3,-0.2,-0.1,0,0.1,0.2,0.3,0.4, 0.5))
+error_maps(metric = "richness_new", time = 2017, breaks = c(-6.7,-5,-3.5,-2,-1,0,1,2,3,4,5))
+```
+
